@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "DataManager.C": "cpp",
+        "draw.C": "cpp"
+    },
+    "cmake.configureOnOpen": false
+}

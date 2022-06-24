@@ -1,1 +1,7 @@
 __pycache__
+dpl-config.json
+*_C.so
+*_C.d
+*_C_ACLiC*
+/.vscode/*.log
+.ipynb_checkpoints
