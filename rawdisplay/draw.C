@@ -1,6 +1,6 @@
 
-#include "../Noise/DataManager.C+"
-#include "../Noise/FmtFormat.C+"
+#include "../macros/DataManager.C+"
+#include "../macros/FmtFormat.C+"
 // #include "SpacePointConverter.C"
 // #include "StreamIO.C"
 
