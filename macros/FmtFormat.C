@@ -1,5 +1,8 @@
 
 
+#ifndef TRD_PAYGROUND_FMT_FORMAT_C
+#define TRD_PAYGROUND_FMT_FORMAT_C
+
 #include <fmt/format.h>
 #include <map>
 
@@ -133,3 +136,5 @@ struct fmt::formatter<o2::trd::Tracklet64>
     }
   }
 };
+
+#endif

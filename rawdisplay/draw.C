@@ -1,38 +1,17 @@
 
 #include "../macros/DataManager.C+"
-#include "../macros/FmtFormat.C+"
+// #include "../macros/FmtFormat.C+"
+// #include "../macros/DrawRawSpan.C+"
 // #include "SpacePointConverter.C"
 // #include "StreamIO.C"
 
-#include "DataFormatsTRD/Constants.h"
-#include "DataFormatsTRD/HelperMethods.h"
-using namespace o2::trd::constants;
+// #include "DataFormatsTRD/Constants.h"
+// #include "DataFormatsTRD/HelperMethods.h"
+// using namespace o2::trd::constants;
 
-int getMCMCol(int irob, int imcm)
-{
-  return (imcm % NMCMROBINCOL) + NMCMROBINCOL * (irob % 2);
-}
 
-float PadPositionMCM(o2::trd::Tracklet64& tracklet)
-{
-  return 12.0 - (tracklet.getPositionBinSigned() * GRANULARITYTRKLPOS);
-}
-
-float PadPosition(o2::trd::Tracklet64& tracklet)
-{
-  // int padLocalBin = tracklet.getPosition() ^ 0x80;
-  int padMCM = PadPositionMCM(tracklet);
-  int mcmCol = getMCMCol(tracklet.getROB(), tracklet.getMCM());
-  return mcmCol * NCOLMCM + padMCM;
-}
-
-float Slope(o2::trd::Tracklet64 &trkl)
-{
-  return trkl.getSlopeBinSigned() * GRANULARITYTRKLSLOPE / ADDBITSHIFTSLOPE;
-}
-
-void DrawPadRow(RawDataSpan& padrow);
-TPad* DrawMCM(RawDataSpan &mcm, TPad *pad=NULL);
+// void DrawPadRow(RawDataSpan& padrow);
+// TPad* DrawMCM(RawDataSpan &mcm, TPad *pad=NULL);
 
 void draw(std::string dirname="data/")
 {
@@ -73,7 +52,7 @@ void draw(std::string dirname="data/")
       for (auto &[key, det] : RawDataPartitioner<ClassifierByMCM>(dman.GetEvent()))
       {
         if (det.digits.length() < 3) { continue; }
-        if (det.tracklets.length() < 1) { continue; }
+        if (det.tracklets.length() >= 1) { continue; }
 
         bool accept_roc = false;
         for (auto tracklet : det.tracklets)
@@ -210,82 +189,47 @@ void draw(std::string dirname="data/")
 
 }
 
-void DrawPadRow(RawDataSpan& padrow)
-{
-  auto x = *padrow.digits.begin();
-  string name = fmt::format("det{:03d}_rob{:d}_mcm{:02d}", 
-    x.getDetector(), x.getROB(), x.getMCM());
-  string desc = fmt::format("{:r}", x);
-  TH2F *digit_disp = new TH2F(name.c_str(), (desc + ";pad;time bin").c_str(), 144, 0., 144., 30, 0., 30.);
-  TCanvas *cnv = new TCanvas(name.c_str(), desc.c_str(), 800, 600);
 
-  for (auto digit : padrow.digits) {
-    if (digit.isSharedDigit()) { continue; }
+// TPad* DrawMCM(RawDataSpan& mcm, TPad* pad)
+// {
+//   auto x = *mcm.digits.begin();
+//   string desc = fmt::format("{:m}", x);
+//   string name = fmt::format("det{:03d}_rob{:d}_mcm{:02d}",
+//                             x.getDetector(), x.getROB(), x.getMCM());
 
-    auto adc = digit.getADC();
-    for (int tb=0; tb<30; ++tb) {
-      digit_disp->Fill(digit.getPadCol(), tb, adc[tb]);
-    }
-  }
-  digit_disp->SetStats(0);
-  digit_disp->Draw("colz");
+//   if (pad == NULL)
+//   {
+//     pad = new TCanvas(desc.c_str(), desc.c_str(), 800, 600);
+//   } else {
+//     pad->SetName(name.c_str());
+//     pad->SetTitle(desc.c_str());
+//   }
+//   pad->cd();
 
+//   TH2F *digit_disp = new TH2F(desc.c_str(), (desc + ";ADC channel;time bin").c_str(), 21, 0., 21., 30, 0., 30.);
 
-  TLine trkl;
-  trkl.SetLineColor(kGreen+2);
+//   for (auto digit : mcm.digits) {
+//     auto adc = digit.getADC();
+//     for (int tb=0; tb<30; ++tb) {
+//       digit_disp->Fill(digit.getChannel(), tb, adc[tb]);
+//     }
+//   }
+//   digit_disp->SetStats(0);
+//   digit_disp->Draw("colz");
 
-  for (auto tracklet : padrow.tracklets)
-  {
-    auto pos = PadPosition(tracklet);
-    auto slope = Slope(tracklet);
-    trkl.DrawLine(pos,0, pos+slope, 30);
-  }
+//   TLine trkl;
+//   trkl.SetLineColor(kRed);
+//   trkl.SetLineWidth(3);
+
+//   for (auto tracklet : mcm.tracklets)
+//   {
+//     auto pos = PadPositionMCM(tracklet);
+//     auto slope = Slope(tracklet);
+//     trkl.DrawLine(pos,0, pos + 30*slope, 30);
+//   }
   
-  cnv->Update();
-  cnv->Draw();
-  cnv->SaveAs((desc + ".pdf").c_str());
-}
+//   return pad;
+// }
 
-TPad* DrawMCM(RawDataSpan& mcm, TPad* pad)
-{
-  auto x = *mcm.digits.begin();
-  string desc = fmt::format("{:m}", x);
-  string name = fmt::format("det{:03d}_rob{:d}_mcm{:02d}",
-                            x.getDetector(), x.getROB(), x.getMCM());
-
-  if (pad == NULL)
-  {
-    pad = new TCanvas(desc.c_str(), desc.c_str(), 800, 600);
-  } else {
-    pad->SetName(name.c_str());
-    pad->SetTitle(desc.c_str());
-  }
-  pad->cd();
-
-  TH2F *digit_disp = new TH2F(desc.c_str(), (desc + ";ADC channel;time bin").c_str(), 21, 0., 21., 30, 0., 30.);
-
-  for (auto digit : mcm.digits) {
-    auto adc = digit.getADC();
-    for (int tb=0; tb<30; ++tb) {
-      digit_disp->Fill(digit.getChannel(), tb, adc[tb]);
-    }
-  }
-  digit_disp->SetStats(0);
-  digit_disp->Draw("colz");
-
-  TLine trkl;
-  trkl.SetLineColor(kRed);
-  trkl.SetLineWidth(3);
-
-  for (auto tracklet : mcm.tracklets)
-  {
-    auto pos = PadPositionMCM(tracklet);
-    auto slope = Slope(tracklet);
-    trkl.DrawLine(pos,0, pos + 30*slope, 30);
-  }
-  
-  return pad;
-}
-
-void DrawROC(RawDataSpan roc)
-{}
+// void DrawROC(RawDataSpan roc)
+// {}

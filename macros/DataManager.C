@@ -1,4 +1,7 @@
 
+#include "../macros/HelperFunctions.C"
+#include "../macros/FmtFormat.C"
+
 #include <DataFormatsTRD/Digit.h>
 #include <DataFormatsTRD/Tracklet64.h>
 #include <DataFormatsTRD/TriggerRecord.h>
@@ -12,7 +15,10 @@
 #include <TTree.h>
 #include <TTreeReader.h>
 #include <TTreeReaderArray.h>
-
+#include <TPad.h>
+#include <TCanvas.h>
+#include <TH2.h>
+#include <TLine.h>
 
 template <typename value_t, template <typename T> typename container_t>
 struct myrange
@@ -177,7 +183,7 @@ public:
       (*this)[classifier::key(*cur)].tracklets.e = nxt;
       cur = nxt;
     }
-
+    cout << "Found " << this->size() << " spans" << endl;
   }
 };
 
@@ -326,4 +332,108 @@ private:
   size_t iTimeframe, iEvent;
 };
 
+TVirtualPad *DrawPadRow(RawDataSpan &padrow, TVirtualPad *pad = NULL, TH2F* adcmap = NULL)
+{
+  auto x = *padrow.digits.begin();
+  string desc = fmt::format("{:m}", x);
+  string name = fmt::format("det{:03d}_rob{:d}_mcm{:02d}",
+                            x.getDetector(), x.getROB(), x.getMCM());
 
+  if (pad == NULL)
+  {
+    pad = new TCanvas(desc.c_str(), desc.c_str(), 1200, 500);
+    pad->cd();
+  }
+  // else
+  // {
+  //   pad->SetName(name.c_str());
+  //   pad->SetTitle(desc.c_str());
+  // }
+
+  if (adcmap == NULL) {
+    adcmap = new TH2F(name.c_str(), (desc + ";pad;time bin").c_str(), 144, 0., 144., 30, 0., 30.);
+  }
+
+  for (auto digit : padrow.digits)
+  {
+    if (digit.isSharedDigit())
+    {
+      continue;
+    }
+
+    auto adc = digit.getADC();
+    for (int tb = 0; tb < 30; ++tb)
+    {
+      adcmap->Fill(digit.getPadCol(), tb, adc[tb]);
+    }
+  }
+  adcmap->SetStats(0);
+  adcmap->Draw("colz");
+  adcmap->Draw("text,same");
+
+  TLine trkl;
+  trkl.SetLineWidth(2);
+  trkl.SetLineColor(kRed);
+  // trkl.SetLineStyle(kDotted);
+
+  TLine trkl2;
+  trkl2.SetLineWidth(4);
+  trkl2.SetLineStyle(kDashed);
+  trkl2.SetLineColor(kBlack);
+
+  for (auto tracklet : padrow.tracklets)
+  {
+    auto pos = PadPosition(tracklet);
+    auto ypos = UncalibratedPad(tracklet);
+    auto slope = Slope(tracklet);
+    trkl.DrawLine(pos, 0, pos - 30*slope, 30);
+    // trkl2.DrawLine(ypos, 0, ypos - 30*slope, 30);
+  }
+
+  return pad;
+}
+
+TPad *DrawMCM(RawDataSpan &mcm, TPad *pad)
+{
+  auto x = *mcm.digits.begin();
+  string desc = fmt::format("{:m}", x);
+  string name = fmt::format("det{:03d}_rob{:d}_mcm{:02d}",
+                            x.getDetector(), x.getROB(), x.getMCM());
+
+  if (pad == NULL)
+  {
+    pad = new TCanvas(desc.c_str(), desc.c_str(), 800, 600);
+  }
+  else
+  {
+    pad->SetName(name.c_str());
+    pad->SetTitle(desc.c_str());
+  }
+  pad->cd();
+
+  TH2F *digit_disp = new TH2F(desc.c_str(), (desc + ";ADC channel;time bin").c_str(), 21, 0., 21., 30, 0., 30.);
+
+  for (auto digit : mcm.digits)
+  {
+    auto adc = digit.getADC();
+    for (int tb = 0; tb < 30; ++tb)
+    {
+      digit_disp->Fill(digit.getChannel(), tb, adc[tb]);
+    }
+  }
+  digit_disp->SetStats(0);
+  digit_disp->Draw("colz");
+
+  TLine trkl;
+  trkl.SetLineColor(kRed);
+  trkl.SetLineWidth(3);
+
+  for (auto tracklet : mcm.tracklets)
+  {
+    auto pos = PadPositionMCM(tracklet);
+    auto slope = Slope(tracklet);
+    trkl.DrawLine(pos, 0, pos + 30 * slope, 30);
+  }
+
+  return pad;
+}
