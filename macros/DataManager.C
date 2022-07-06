@@ -9,6 +9,7 @@
 #include <DataFormatsTRD/Constants.h>
 
 #include <DataFormatsTPC/TrackTPC.h>
+#include <CommonDataFormat/TFIDInfo.h>
 
 #include <TSystem.h>
 #include <TFile.h>
@@ -41,7 +42,26 @@ struct RawDataSpan
 {
   myrange<o2::trd::Digit, TTreeReaderArray> digits;
   myrange<o2::trd::Tracklet64, TTreeReaderArray> tracklets;
+
+  vector<o2::tpc::TrackTPC> tpctracks;
+
+  pair<int, int> getMaxADCsumAndChannel();
+  int getMaxADCsum(){ return getMaxADCsumAndChannel().first; }
 };
+
+pair<int, int> RawDataSpan::getMaxADCsumAndChannel()
+{
+  int maxch = -1, maxval = -1;
+  for (auto digit : digits) {
+    if (digit.getADCsum() > maxval) {
+      maxval = digit.getADCsum();
+      maxch = digit.getChannel();
+    }
+  // cout << digit << endl;
+  }
+
+  return make_pair(maxval, maxch);
+}
 
 ostream& operator<<(ostream& os, RawDataSpan& sp)
 {
@@ -145,6 +165,35 @@ struct ClassifierByMCM
   }
 };
 
+// struct ClassifierByContinousRegion
+// {
+//   template<typename T>
+//   static uint32_t mcmid(const T &x) { 
+//     return 1000*x.getDetector() + 10*x.getPadRow() + 4*(x.getROB()%2) + x.getMCM()%4;
+//   }
+
+//   template<typename T>
+//   static uint32_t mcmid(const T &x) { 
+//     return 1000*x.getDetector() + 10*x.getPadRow() + 4*(x.getROB()%2) + x.getMCM()%4;
+//   }
+
+//   static bool comp_digits(const o2::trd::Digit &a, const o2::trd::Digit &b)
+//   {
+//     if (mcmid(a) != mcmid(b)) {
+//       return false;
+//     } else if ( abs(a.getChannel()-b.getChannel()) == 1 ) {
+//       return true;
+//     } else {
+//       return false;
+//     }
+//   }
+
+//   // static bool comp_tracklets(const o2::trd::Tracklet64 &a, const o2::trd::Tracklet64 &b)
+//   // {
+//   //   return key(a) != key(b);
+//   // }
+// };
+
 
 template<typename classifier>
 class RawDataPartitioner : public map<uint32_t, RawDataSpan>
@@ -187,136 +236,37 @@ public:
   }
 };
 
+// ========================================================================
+// the DataManager class
+// ========================================================================
 
 class DataManager
 {
 
 public:
+  DataManager(std::string dir = "data/");
 
-  DataManager(std::string dir="data/")
-  : mainfile(0), datatree(0), datareader(0),
-    hits(0), digits(0), tracklets(0), trgrecords(0),
-    iTimeframe(0), iEvent(0)
-  {
+  void SetMatchWindowTPC(float min, float max)
+  { mMatchTimeMinTPC=min; mMatchTimeMaxTPC=max; }
 
-    std::string testfiles[] = { "trddigits.root", "trdtracklets.root" };
+  bool NextTimeFrame();
+  bool NextEvent();
 
-    for ( auto fname : testfiles ) {
-      auto fullname = dir + fname;
-      if(gSystem->AccessPathName(fullname.c_str())) { 
-        cout << "WARN: The file " << fname << " doesn't exist. Skipping." 
-             << endl;
-        continue;
-      } 
+  // access time frame info
+  o2::dataformats::TFIDInfo GetTimeFrameInfo();
+  TTreeReaderArray<o2::tpc::TrackTPC>* GetTimeFrameTPCTracks() 
+  { return tpctracks; }
 
-      if ( ! datatree ) {
-        mainfile = new TFile(fullname.c_str());
-        mainfile->GetObject("o2sim", datatree);
-        datareader = new TTreeReader(datatree);
-      } else {
-        datatree->AddFriend("o2sim", fullname.c_str());
-      }
-    }
-
-    // auto tracksfilename = dir + "tpctracks.root";
-    // if (gSystem->AccessPathName(tracksfilename.c_str())) {
-    //   datatree->AddFriend("tpcrec", tracksfilename.c_str());
-    // }
-     
-    // set up the branches we want to read
-    digits = new TTreeReaderArray<o2::trd::Digit>(*datareader, "TRDDigit");
-    tracklets = new TTreeReaderArray<o2::trd::Tracklet64>(*datareader, "Tracklet");
-    trgrecords = new TTreeReaderArray<o2::trd::TriggerRecord>(*datareader, "TrackTrg");
-    // tpctracks = new TTreeReaderArray<o2::tpc::TrackTPC>(*datareader, "TPCTracks");
-
-    // ConnectMCHitsFile(dir+"o2sim_HitsTRD.root");
-    }
-
-  bool NextTimeFrame()
-  {
-    if (datareader->Next() ) {
-      iEvent = 0;
-      iTimeframe++;
-      cout << "## Time frame " << iTimeframe << endl;
-
-      for (auto &tracklet : *tracklets)
-      {
-        tracklet.setPosition(tracklet.getPosition() ^ 0x80);
-        tracklet.setSlope(tracklet.getSlope() ^ 0x80);
-      }
-
-      // cout << "Found " << tpctracks->GetSize() << " TPC tracks" << endl;
-
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  bool NextEvent()
-  {
-    // get the next trigger record
-    if (iEvent >= trgrecords->GetSize()) {
-      return false;
-    }
-
-    // load the hits for the next event
-    // if ( ! rdrhits->Next() ) {
-    //   cout << "no hits found for event " << tfno << ":" << iEvent << endl;
-    //   return false;
-    // }
-
-    mTriggerRecord = trgrecords->At(iEvent);
-    // cout << mTriggerRecord << endl;
-
-    cout << "## Event " << iTimeframe << ":" << iEvent << ":  "
-        //  << hits->GetSize() << " hits   "
-         << mTriggerRecord.getNumberOfDigits() << " digits and "
-         << mTriggerRecord.getNumberOfTracklets() << " tracklets" << endl;
-
-    iEvent++;
-    return true;
-  }
-
-  RawDataSpan GetEvent()
-  {
-    RawDataSpan ev;
-    // ev.digits = GetDigits();
-    ev.digits.b = digits->begin() + mTriggerRecord.getFirstDigit();
-    ev.digits.e = ev.digits.begin() + mTriggerRecord.getNumberOfDigits();
-    ev.tracklets.b = tracklets->begin() + mTriggerRecord.getFirstTracklet();
-    ev.tracklets.e = ev.tracklets.begin() + mTriggerRecord.getNumberOfTracklets();
-    return ev;
-  }
+  // access event info
+  RawDataSpan GetEvent();
+  float GetTriggerTime();
 
   size_t GetTimeFrameNumber() { return iTimeframe; }
   size_t GetEventNumber() { return iEvent; }
 
-
-protected :
-      // void ConnectMCHitsFile(std::string fname)
-      // {
-      //   // ----------------------------------------------------------------------
-      //   // set up data structures for reading
-
-      //   if (fhits || trhits) {
-      //     cerr << "Hits file seems to be connected." << endl;
-      //     return;
-      //   }
-
-      //   fhits = new TFile(fname.c_str());
-      //   fhits->GetObject("o2sim", trhits);
-
-      //   rdrhits = new TTreeReader(trhits);
-      //   hits = new TTreeReaderArray<o2::trd::Hit>(*rdrhits, "TRDHit");
-      // }
-
 private: 
   TFile *mainfile;
-  // TFile *fhits, *fdigits, *ftracklets;
-  // TTree *trhits, *trdigits, *trtracklets, *trtrgrec;
   TTree* datatree; // tree and friends from digits, tracklets files
-  // TTreeReader *rdrhits, *rdrdigits, *rdrtracklets, *rdrtrgreg;
   TTreeReader *datareader;
 
   TTreeReaderArray<o2::trd::Hit>* hits;
@@ -326,13 +276,182 @@ private:
 
   TTreeReaderArray<o2::tpc::TrackTPC> *tpctracks;
 
-  // DigitRange ev_digits;//, sel_digits;
   o2::trd::TriggerRecord mTriggerRecord;
 
+  std::vector<o2::dataformats::TFIDInfo> *tfids;
+
   size_t iTimeframe, iEvent;
+  float mMatchTimeMinTPC{-10.0}, mMatchTimeMaxTPC{20.0};
 };
 
-TVirtualPad *DrawPadRow(RawDataSpan &padrow, TVirtualPad *pad = NULL, TH2F* adcmap = NULL)
+DataManager::DataManager(std::string dir)
+    : mainfile(0), datatree(0), datareader(0),
+      hits(0), digits(0), tracklets(0), trgrecords(0), tpctracks(0),
+      tfids(0),
+      iTimeframe(0), iEvent(0)
+{
+
+  std::string testfiles[] = {"trddigits.root", "trdtracklets.root"};
+  std::string fullname;
+
+  for (auto fname : testfiles)
+  {
+    fullname = dir + fname;
+    if (gSystem->AccessPathName(fullname.c_str()))
+    {
+      cout << "WARN: The file " << fname << " doesn't exist. Skipping."
+           << endl;
+      continue;
+    }
+
+    if (!datatree)
+    {
+      mainfile = new TFile(fullname.c_str());
+      mainfile->GetObject("o2sim", datatree);
+      datareader = new TTreeReader(datatree);
+    }
+    else
+    {
+      datatree->AddFriend("o2sim", fullname.c_str());
+    }
+  }
+
+
+  // set up the branches we want to read
+  digits = new TTreeReaderArray<o2::trd::Digit>(*datareader, "TRDDigit");
+  tracklets = new TTreeReaderArray<o2::trd::Tracklet64>(*datareader, "Tracklet");
+  trgrecords = new TTreeReaderArray<o2::trd::TriggerRecord>(*datareader, "TrackTrg");
+
+
+  TFile* fInTFID = TFile::Open((dir+"o2_tfidinfo.root").c_str());
+  if (fInTFID) {
+    // for a simulation this file is not available
+    tfids = (std::vector<o2::dataformats::TFIDInfo> *)fInTFID->Get("tfidinfo");
+  }
+
+  fullname = dir + "tpctracks.root";
+  if (!gSystem->AccessPathName(fullname.c_str())) {
+    auto bla = datatree->AddFriend("tpcrec", fullname.c_str());
+    cout << bla << endl;
+    tpctracks = new TTreeReaderArray<o2::tpc::TrackTPC>(*datareader, "TPCTracks");
+  } else {
+    cout << "No TPC tracks found at " << fullname << endl;
+  }
+
+  // ConnectMCHitsFile(dir+"o2sim_HitsTRD.root");
+}
+
+bool DataManager::NextTimeFrame()
+{
+  if (datareader->Next())
+  {
+    iEvent = 0;
+    iTimeframe++;
+    cout << "## Time frame " << iTimeframe << endl;
+
+    for (auto &tracklet : *tracklets) {
+      tracklet.setPosition(tracklet.getPosition() ^ 0x80);
+      tracklet.setSlope(tracklet.getSlope() ^ 0x80);
+    }
+
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
+bool DataManager::NextEvent()
+{
+  // get the next trigger record
+  if (iEvent >= trgrecords->GetSize()) {
+    return false;
+  }
+
+  // load the hits for the next event
+  // if ( ! rdrhits->Next() ) {
+  //   cout << "no hits found for event " << tfno << ":" << iEvent << endl;
+  //   return false;
+  // }
+
+  mTriggerRecord = trgrecords->At(iEvent);
+  // cout << mTriggerRecord << endl;
+
+  cout << "## Event " << iTimeframe << ":" << iEvent << ":  "
+       //  << hits->GetSize() << " hits   "
+       << mTriggerRecord.getNumberOfDigits() << " digits and "
+       << mTriggerRecord.getNumberOfTracklets() << " tracklets" << endl;
+
+  iEvent++;
+  return true;
+}
+
+RawDataSpan DataManager::GetEvent()
+{
+  RawDataSpan ev;
+  // ev.digits = GetDigits();
+  ev.digits.b = digits->begin() + mTriggerRecord.getFirstDigit();
+  ev.digits.e = ev.digits.begin() + mTriggerRecord.getNumberOfDigits();
+  ev.tracklets.b = tracklets->begin() + mTriggerRecord.getFirstTracklet();
+  ev.tracklets.e = ev.tracklets.begin() + mTriggerRecord.getNumberOfTracklets();
+
+  auto evtime = GetTriggerTime();
+  if (tpctracks) {
+    for (auto &track : *tpctracks) {
+      //   // auto tracktime = track.getTimeMUS().getTimeStamp();
+      auto dtime = track.getTime0() / 5.0 - evtime;
+      if (dtime > mMatchTimeMinTPC && dtime < mMatchTimeMaxTPC) {
+        ev.tpctracks.push_back(track);
+      }
+    }
+  }
+
+  return ev;
+}
+
+o2::dataformats::TFIDInfo DataManager::GetTimeFrameInfo()
+{
+  if (tfids) {
+    return tfids->at(iTimeframe-1);
+  } else {
+    return o2::dataformats::TFIDInfo();
+  }
+}
+
+float DataManager::GetTriggerTime()
+{
+  auto tfid = GetTimeFrameInfo();
+
+  if (tfid.isDummy()) {
+    return mTriggerRecord.getBCData().bc2ns() * 1e-3;
+  } else {
+    o2::InteractionRecord intrec = {0, tfid.firstTForbit};
+    return mTriggerRecord.getBCData().differenceInBCMS(intrec);
+  }
+}
+// void DataManager::ConnectMCHitsFile(std::string fname)
+// {
+//   // ----------------------------------------------------------------------
+//   // set up data structures for reading
+
+//   if (fhits || trhits) {
+//     cerr << "Hits file seems to be connected." << endl;
+//     return;
+//   }
+
+//   fhits = new TFile(fname.c_str());
+//   fhits->GetObject("o2sim", trhits);
+
+//   rdrhits = new TTreeReader(trhits);
+//   hits = new TTreeReaderArray<o2::trd::Hit>(*rdrhits, "TRDHit");
+// }
+
+// ========================================================================
+// Drawing routines
+// ========================================================================
+
+TVirtualPad *DrawPadRow(RawDataSpan &padrow, TVirtualPad *pad = NULL, TH2F *adcmap = NULL)
 {
   auto x = *padrow.digits.begin();
   string desc = fmt::format("{:m}", x);
