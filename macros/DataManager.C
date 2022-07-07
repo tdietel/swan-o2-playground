@@ -8,6 +8,7 @@
 #include <DataFormatsTRD/Hit.h>
 #include <DataFormatsTRD/Constants.h>
 
+#include "ReconstructionDataFormats/TrackTPCITS.h"
 #include <DataFormatsTPC/TrackTPC.h>
 #include <CommonDataFormat/TFIDInfo.h>
 
@@ -240,6 +241,7 @@ public:
 // the DataManager class
 // ========================================================================
 
+
 class DataManager
 {
 
@@ -254,8 +256,11 @@ public:
 
   // access time frame info
   o2::dataformats::TFIDInfo GetTimeFrameInfo();
-  TTreeReaderArray<o2::tpc::TrackTPC>* GetTimeFrameTPCTracks() 
-  { return tpctracks; }
+  TTreeReaderArray<o2::tpc::TrackTPC> *GetTimeFrameTPCTracks()
+  {return tpctracks; }
+  
+  TTreeReaderArray<o2::dataformats::TrackTPCITS> *GetTimeFrameTracks()
+  { return tracks; }
 
   // access event info
   RawDataSpan GetEvent();
@@ -274,6 +279,7 @@ private:
   TTreeReaderArray<o2::trd::Tracklet64>* tracklets;
   TTreeReaderArray<o2::trd::TriggerRecord>* trgrecords;
 
+  TTreeReaderArray<o2::dataformats::TrackTPCITS> *tracks;
   TTreeReaderArray<o2::tpc::TrackTPC> *tpctracks;
 
   o2::trd::TriggerRecord mTriggerRecord;
@@ -282,6 +288,12 @@ private:
 
   size_t iTimeframe, iEvent;
   float mMatchTimeMinTPC{-10.0}, mMatchTimeMaxTPC{20.0};
+
+  template <typename T>
+  TTreeReaderArray<T> *AddReaderArray(std::string file, std::string tree, std::string branch);
+
+  template <typename T>
+  void AddReaderArray(TTreeReaderArray<T> *& array, std::string file, std::string tree, std::string branch);
 };
 
 DataManager::DataManager(std::string dir)
@@ -291,54 +303,58 @@ DataManager::DataManager(std::string dir)
       iTimeframe(0), iEvent(0)
 {
 
-  std::string testfiles[] = {"trddigits.root", "trdtracklets.root"};
-  std::string fullname;
-
-  for (auto fname : testfiles)
-  {
-    fullname = dir + fname;
-    if (gSystem->AccessPathName(fullname.c_str()))
-    {
-      cout << "WARN: The file " << fname << " doesn't exist. Skipping."
-           << endl;
-      continue;
-    }
-
-    if (!datatree)
-    {
-      mainfile = new TFile(fullname.c_str());
-      mainfile->GetObject("o2sim", datatree);
-      datareader = new TTreeReader(datatree);
-    }
-    else
-    {
-      datatree->AddFriend("o2sim", fullname.c_str());
-    }
-  }
-
+  // We allways need the trigger records, which are stored in trdtracklets.root.
+  // While at it, let's also set up reading the tracklets.
+  mainfile = new TFile((dir+"trdtracklets.root").c_str());
+  mainfile->GetObject("o2sim", datatree);
+  datareader = new TTreeReader(datatree);
 
   // set up the branches we want to read
-  digits = new TTreeReaderArray<o2::trd::Digit>(*datareader, "TRDDigit");
   tracklets = new TTreeReaderArray<o2::trd::Tracklet64>(*datareader, "Tracklet");
   trgrecords = new TTreeReaderArray<o2::trd::TriggerRecord>(*datareader, "TrackTrg");
 
-
+  // For data, we need info about time frames to match ITS and TPC tracks to 
+  // trigger records.
   TFile* fInTFID = TFile::Open((dir+"o2_tfidinfo.root").c_str());
   if (fInTFID) {
     // for a simulation this file is not available
     tfids = (std::vector<o2::dataformats::TFIDInfo> *)fInTFID->Get("tfidinfo");
   }
 
-  fullname = dir + "tpctracks.root";
-  if (!gSystem->AccessPathName(fullname.c_str())) {
-    auto bla = datatree->AddFriend("tpcrec", fullname.c_str());
-    cout << bla << endl;
-    tpctracks = new TTreeReaderArray<o2::tpc::TrackTPC>(*datareader, "TPCTracks");
-  } else {
-    cout << "No TPC tracks found at " << fullname << endl;
-  }
+  // Let's try to add other data
+  // digits = AddReaderArray<o2::trd::Digit>(dir+"trddigits.root", "o2sim", "TRDDigit");
+  // tpctracks = AddReaderArray<o2::tpc::TrackTPC>(dir + "tpctracks.root", "tpcrec", "TPCTracks");
+  AddReaderArray(digits, dir+"trddigits.root", "o2sim", "TRDDigit");
+  AddReaderArray(tpctracks, dir + "tpctracks.root", "tpcrec", "TPCTracks");
+  AddReaderArray(tracks, dir + "o2match_itstpc.root", "matchTPCITS", "TPCITS");
 
   // ConnectMCHitsFile(dir+"o2sim_HitsTRD.root");
+}
+
+template <typename T>
+TTreeReaderArray<T> *DataManager::AddReaderArray(std::string file, std::string tree, std::string branch)
+{
+  if (gSystem->AccessPathName(file.c_str())) {
+    // file was not found
+    return nullptr;
+  }
+
+  // the file exists, everything else should work
+  datatree->AddFriend(tree.c_str(), file.c_str());
+  return new TTreeReaderArray<T>(*datareader, branch.c_str());
+}
+
+template <typename T>
+void DataManager::AddReaderArray(TTreeReaderArray<T> *&array, std::string file, std::string tree, std::string branch)
+{
+  if (gSystem->AccessPathName(file.c_str())) {
+    // file was not found
+    return;
+  }
+
+  // the file exists, everything else should work
+  datatree->AddFriend(tree.c_str(), file.c_str());
+  array = new TTreeReaderArray<T>(*datareader, branch.c_str());
 }
 
 bool DataManager::NextTimeFrame()

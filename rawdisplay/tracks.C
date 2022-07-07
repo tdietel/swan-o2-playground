@@ -10,12 +10,14 @@ void tracks(std::string dirname = "/Users/tom/alice/data/alex-TRD-126-rec/")
 
   // ----------------------------------------------------------------------
   // create output objects
-  TCanvas *rawdisp = new TCanvas();
-  TFile *outfile = new TFile("trd_track_matches.root", "RECREATE");
+  // TCanvas *rawdisp = new TCanvas();
+  // rawdisp->Draw();
 
   TH2F* htime = new TH2F("htime", "htime;evtime;tracktime", 100, 0., 12000, 100, 0., 12000.);
   TH1F* hdtime = new TH1F("hdtime", "htime;tracktime - evtime;", 200, -150., 100.);
   TH1F* hdmtime = new TH1F("hdmtime", "htime (matched);tracktime - evtime;", 200, -150., 50.);
+  TH1F* hditime = new TH1F("hditime", "hditime;tracktime - evtime;", 200, -150., 100.);
+
   // TNtuple *roi = new TNtuple("roi", "roi", "det:rob:mcm:ch:tbmax:nbhi:nblo:nbnb");
   // TNtuple *diginfo = new TNtuple("diginfo", "diginfo",
   //                                "det:rob:mcm:ch:adcsum:mean:rms:lmax");
@@ -42,6 +44,11 @@ void tracks(std::string dirname = "/Users/tom/alice/data/alex-TRD-126-rec/")
         hdtime->Fill(tracktime - evtime);
       }
 
+      for (auto& track : *dman.GetTimeFrameTracks()) {
+        auto tracktime = track.getTimeMUS().getTimeStamp();
+        hditime->Fill(tracktime - evtime);
+      }
+
       for (auto& track : ev.tpctracks) {
       //   // auto tracktime = track.getTimeMUS().getTimeStamp();
         auto tracktime = track.getTime0()/5.0;
@@ -63,9 +70,15 @@ void tracks(std::string dirname = "/Users/tom/alice/data/alex-TRD-126-rec/")
     } // event/trigger record loop
   }   // time frame loop
 
-  htime->DrawClone("colz");
+  hditime->SetLineColor(kRed);
+
+  hditime->DrawClone();
+  hdtime->DrawClone("same");
+
+  TFile *outfile = new TFile("trd_track_matches.root", "RECREATE");
   htime->Write();
   hdtime->Write();
+  hditime->Write();
   hdmtime->Write();
   outfile->Close();
 }
