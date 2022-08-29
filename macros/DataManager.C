@@ -8,7 +8,11 @@
 #include <DataFormatsTRD/Hit.h>
 #include <DataFormatsTRD/Constants.h>
 
-#include "ReconstructionDataFormats/TrackTPCITS.h"
+#include <TRDBase/Geometry.h>
+
+#include <DetectorsBase/GeometryManager.h>
+#include <DetectorsBase/Propagator.h>
+#include <ReconstructionDataFormats/TrackTPCITS.h>
 #include <DataFormatsTPC/TrackTPC.h>
 #include <CommonDataFormat/TFIDInfo.h>
 
@@ -21,12 +25,119 @@
 #include <TCanvas.h>
 #include <TH2.h>
 #include <TLine.h>
+#include <TMarker.h>
 
-template <typename value_t, template <typename T> typename container_t>
-struct myrange
+#include <vector>
+
+using namespace std;
+
+// ========================================================================
+// ========================================================================
+//
+// ChamberSpacePoint:  A position in spatial (x,y,z) and raw/digit
+// coordinates (det,row,col,tb).
+//
+// ========================================================================
+// ========================================================================
+
+class ChamberSpacePoint
 {
+ public:
+  ChamberSpacePoint(int det = -999) : mDetector(det){};
+  ChamberSpacePoint(o2::track::TrackParCov& t, o2::trd::Geometry* geo = nullptr);
+
+  bool isValid() const { return mDetector >= 0; }
+  float getX() const { return mX; }
+  float getY() const { return mY; }
+  float getZ() const { return mZ; }
+  int getDetector() const { return mDetector; }
+  int getPadRow() const { return mPadrow; }
+  float getPadCol() const { return mPadcol; }
+  float getTimeBin() const { return mTimebin; }
+
+ protected:
+  float mX, mY, mZ;
+  int mDetector;
+  int mPadrow;
+  float mPadcol, mTimebin;
+
+  static constexpr float xscale = 1.0 / (o2::trd::Geometry::cheight() + o2::trd::Geometry::cspace());
+  static constexpr float xoffset = o2::trd::Geometry::getTime0(0);
+  static constexpr float alphascale = 1.0 / o2::trd::Geometry::getAlpha();
+};
+
+ChamberSpacePoint::ChamberSpacePoint(o2::track::TrackParCov& trackpar, o2::trd::Geometry* geo)
+  : mX(trackpar.getX()), mY(trackpar.getY()), mZ(trackpar.getZ())
+{
+  if (geo == nullptr)
+    geo = o2::trd::Geometry::instance();
+
+  int layer = int((mX - xoffset) * xscale);
+
+  int sector = int(trackpar.getAlpha() * alphascale);
+  while (sector < 0)
+    sector += 18;
+  while (sector >= 18)
+    sector -= 18;
+
+  int stack = geo->getStack(trackpar.getZ(), layer);
+  if (stack < 0) {
+    // if (draw)
+    // printf("WARN: cannot determine stack for z = %f, layer = %i\n", trackpar.getZ(), layer);
+    mDetector = -999;
+    return;
+  }
+
+  mDetector = 30 * sector + 6 * stack + layer;
+  auto pp = geo->getPadPlane(layer, stack);
+  mPadrow = pp->getPadRowNumber(trackpar.getZ());
+  mPadcol = pp->getPadColNumber(trackpar.getY());
+
+  int rowMax = (stack == 2) ? 12 : 16;
+  if (mPadrow < 0 || mPadrow >= rowMax) {
+    // if (draw)
+    printf("WARN: row  = %i for z = %f\n", mPadrow, trackpar.getZ());
+    mDetector = -abs(mDetector);
+  }
+
+  // Mark points that are too far outside of the detector as questionable.
+  if (mPadcol < -2.0 || mPadcol >= 145.0 ) {
+    // if (draw)
+    printf("WARN: col  = %f for y = %f\n", mPadcol, trackpar.getY());
+    mDetector = -abs(mDetector);
+  }
+
+  // cout << "Created new ChamberSpacePoint with det=" << getDetector()
+      //  << " row=" << getPadRow() << " col=" << getPadCol() << endl;
+}
+
+ostream& operator<<(ostream& os, const ChamberSpacePoint& p)
+{
+  os << "( " << setprecision(5) << p.getX() 
+     << " / " << setprecision(5) << p.getY() 
+     << " / " << setprecision(6) << p.getZ() << ") <-> ["
+     << p.getDetector() << "." << p.getPadRow() 
+     << " pad " << setprecision(5) << p.getPadCol() << "]";
+  return os;
+}
+
+
+
+// ========================================================================
+// ========================================================================
+//
+// RawDataSpan: container for TRD digits, tracklets, space points and
+// other pieces of information to understand the TRD
+//
+// ========================================================================
+// ========================================================================
+
+// template <typename value_t, template <typename T> typename container_t>
+template <typename value_t, typename container_t>
+struct myrange {
   // typedef value_t value_type;
-  typedef typename container_t<value_t>::iterator iterator;
+  // typedef typename container_t<value_t>::iterator iterator;
+  typedef typename container_t::iterator iterator;
 
   iterator &begin() { return b; }
   iterator &end() { return e; }
@@ -39,15 +150,67 @@ struct myrange
   }
 };
 
-struct RawDataSpan
+class RawDataSpan
 {
-  myrange<o2::trd::Digit, TTreeReaderArray> digits;
-  myrange<o2::trd::Tracklet64, TTreeReaderArray> tracklets;
-
-  vector<o2::tpc::TrackTPC> tpctracks;
+public:
+  myrange<o2::trd::Digit, TTreeReaderArray<o2::trd::Digit>> digits;
+  myrange<o2::trd::Tracklet64, TTreeReaderArray<o2::trd::Tracklet64>> tracklets;
+  myrange<ChamberSpacePoint, std::vector<ChamberSpacePoint>> trackpoints;
 
   pair<int, int> getMaxADCsumAndChannel();
   int getMaxADCsum(){ return getMaxADCsumAndChannel().first; }
+
+  int getDetector() { if (mDetector == -1) calculateCoordinates(); return mDetector; } 
+  int getPadRow() { if (mPadRow == -1) calculateCoordinates(); return mPadRow; } 
+  
+protected:
+  // The following variables cache the calculations of raw coordinates:
+  //   non-negative values indicate the actual position
+  //   -1 indicates that the values has not been calculated yet
+  //   -2 indicates that the value is not unique in this span 
+  int mDetector{-1};
+  int mPadRow{-1};
+
+  void calculateCoordinates();
+
+};
+
+
+void RawDataSpan::calculateCoordinates()
+{
+  for (auto& x : digits) {
+    if (mDetector == -1) {
+      mDetector = x.getDetector();
+    } else if (mDetector != x.getDetector()) {
+      mDetector = -2;
+    }
+    if (mPadRow == -1) {
+      mPadRow = x.getPadRow();
+    } else if (mPadRow != x.getPadRow()) {
+      mPadRow = -2;
+    }
+  }
+  for (auto& x : tracklets) {
+    if (mDetector == -1) {
+      mDetector = x.getDetector();
+    } else if (mDetector != x.getDetector()) {
+      mDetector = -2;
+    }
+    if (mPadRow == -1) {
+      mPadRow = x.getPadRow();
+    } else if (mPadRow != x.getPadRow()) {
+      mPadRow = -2;
+    }
+  }
+}
+
+
+
+struct RawEvent : public RawDataSpan
+{
+  vector<o2::tpc::TrackTPC> tpctracks;
+  vector<o2::dataformats::TrackTPCITS> tracks;
+  vector<ChamberSpacePoint> evtrackpoints;
 };
 
 pair<int, int> RawDataSpan::getMaxADCsumAndChannel()
@@ -66,8 +229,9 @@ pair<int, int> RawDataSpan::getMaxADCsumAndChannel()
 
 ostream& operator<<(ostream& os, RawDataSpan& sp)
 {
-  os << "raw data span with " << sp.digits.length() << " digits and " 
-     << sp.tracklets.length() << " tracklets";
+  os << sp.digits.length() << " digits, " 
+     << sp.tracklets.length() << " tracklets, "
+     << sp.trackpoints.length() << " track points";
   return os;
 }
 
@@ -87,6 +251,20 @@ bool order_digit(const o2::trd::Digit &a, const o2::trd::Digit &b)
 
   if (a.getChannel() != b.getChannel())
     return a.getChannel() < b.getChannel();
+
+  return true;
+}
+
+bool order_spacepoint(const ChamberSpacePoint &a, const ChamberSpacePoint &b)
+{
+  if (a.getDetector() != b.getDetector())
+    return a.getDetector() < b.getDetector();
+
+  if (a.getPadRow() != b.getPadRow())
+    return a.getPadRow() < b.getPadRow();
+
+  if (a.getPadCol() != b.getPadCol())
+    return a.getPadCol() < b.getPadCol();
 
   return true;
 }
@@ -114,57 +292,54 @@ bool order_tracklet(const o2::trd::Tracklet64 &a, const o2::trd::Tracklet64 &b)
 
 struct ClassifierByDetector
 {
-  static uint32_t key(const o2::trd::Digit &x) { return x.getDetector(); }
-  static uint32_t key(const o2::trd::Tracklet64 &x) { return x.getDetector(); }
+  template<typename T> static uint32_t key(const T &x) { return x.getDetector(); }
 
   static bool comp_digits(const o2::trd::Digit &a, const o2::trd::Digit &b)
-  {
-    return key(a) != key(b);
-  }
+  { return key(a) != key(b); }
 
   static bool comp_tracklets(const o2::trd::Tracklet64 &a, const o2::trd::Tracklet64 &b)
-  {
-    return key(a) != key(b);
-  }
+  { return key(a) != key(b); }
+
+  static bool comp_trackpoints(const ChamberSpacePoint &a, const ChamberSpacePoint &b)
+  { return key(a) != key(b); }
 };
 
 struct ClassifierByPadRow
 {
-  static uint32_t key(const o2::trd::Digit &x) { 
-    return 100*x.getDetector() + x.getPadRow();
-  }
-  static uint32_t key(const o2::trd::Tracklet64 &x) {
-    return 100 * x.getDetector() + x.getPadRow();
-  }
-
-  static bool comp_digits(const o2::trd::Digit &a, const o2::trd::Digit &b)
-  {
-    return key(a) != key(b);
-  }
-
-  static bool comp_tracklets(const o2::trd::Tracklet64 &a, const o2::trd::Tracklet64 &b)
-  {
-    return key(a) != key(b);
-  }
-};
-
-struct ClassifierByMCM
-{
   template<typename T>
-  static uint32_t key(const T &x) { 
-    return 1000*x.getDetector() + 10*x.getPadRow() + 4*(x.getROB()%2) + x.getMCM()%4;
-  }
+  static uint32_t key(const T &x) { return 100*x.getDetector() + x.getPadRow(); }
 
   static bool comp_digits(const o2::trd::Digit &a, const o2::trd::Digit &b)
-  {
-    return key(a) != key(b);
-  }
+  { return key(a) != key(b); }
 
   static bool comp_tracklets(const o2::trd::Tracklet64 &a, const o2::trd::Tracklet64 &b)
-  {
-    return key(a) != key(b);
-  }
+  { return key(a) != key(b); }
+
+  static bool comp_trackpoints(const ChamberSpacePoint& a, const ChamberSpacePoint& b)
+  { return key(a) != key(b); }
 };
+
+// struct ClassifierByMCM
+// {
+//   template<typename T>
+//   static uint32_t key(const T &x) { 
+//     return 1000*x.getDetector() + 10*x.getPadRow() + 4*(x.getROB()%2) + x.getMCM()%4;
+//   }
+
+//   template<>
+//   static uint32_t key(const T &x) { 
+//     return 1000*x.getDetector() + 10*x.getPadRow() + 4*(x.getROB()%2) + x.getMCM()%4;
+//   }
+
+//   static bool comp_digits(const o2::trd::Digit &a, const o2::trd::Digit &b)
+//   { return key(a) != key(b); }
+
+//   static bool comp_tracklets(const o2::trd::Tracklet64 &a, const o2::trd::Tracklet64 &b)
+//   { return key(a) != key(b); }
+
+//   static bool comp_trackpoints(const ChamberSpacePoint& a, const ChamberSpacePoint& b)
+//   { return key(a) != key(b); }
+// };
 
 // struct ClassifierByContinousRegion
 // {
@@ -206,6 +381,7 @@ public:
     // sort digits and tracklets
     event.digits.sort(order_digit);
     event.tracklets.sort(order_tracklet);
+    event.trackpoints.sort(order_spacepoint);
 
     // add all the digits to a map that contains all the 
     for (auto cur = event.digits.b; cur != event.digits.e; /* noop */ ) {
@@ -233,12 +409,158 @@ public:
       (*this)[classifier::key(*cur)].tracklets.e = nxt;
       cur = nxt;
     }
+
+    for (auto cur = event.trackpoints.b; cur != event.trackpoints.e; /* noop */) {
+      auto nxt = std::adjacent_find(cur, event.trackpoints.e, classifier::comp_trackpoints);
+      if (nxt != event.trackpoints.e) { ++nxt; }
+      (*this)[classifier::key(*cur)].trackpoints.b = cur; 
+      (*this)[classifier::key(*cur)].trackpoints.e = nxt;
+      cur = nxt;
+    }
     cout << "Found " << this->size() << " spans" << endl;
   }
 };
 
 // ========================================================================
+// ========================================================================
+//
+// Track extrapolation
+//
+// ========================================================================
+// ========================================================================
+
+class TrackExtrapolator
+{
+ public:
+  TrackExtrapolator();
+
+  ChamberSpacePoint extrapolate(o2::track::TrackParCov& t, int layer);
+
+ private:
+  bool adjustSector(o2::track::TrackParCov& t);
+  int getSector(float alpha);
+
+  o2::trd::Geometry* mGeo;
+  o2::base::Propagator* mProp;
+};
+
+TrackExtrapolator::TrackExtrapolator()
+  // : mGeo(o2::trd::Geometry::instance())
+  // : mProp(o2::base::Propagator::Instance())
+{
+  cout << "TrackExtrapolator: load geometry" << endl;
+  o2::base::GeometryManager::loadGeometry();
+  cout << "TrackExtrapolator: load B-field" << endl;
+  o2::base::Propagator::initFieldFromGRP();
+
+  cout << "TrackExtrapolator: instantiate geometry" << endl;
+
+  mGeo = o2::trd::Geometry::instance();
+  mGeo->createPadPlaneArray();
+  mGeo->createClusterMatrixArray();
+
+  mProp = o2::base::Propagator::Instance();
+}
+
+bool TrackExtrapolator::adjustSector(o2::track::TrackParCov& t)
+{
+  float alpha = mGeo->getAlpha();
+  float xTmp = t.getX();
+  float y = t.getY();
+  float yMax = t.getX() * TMath::Tan(0.5f * alpha);
+  float alphaCurr = t.getAlpha();
+  if (fabs(y) > 2 * yMax) {
+    printf("Skipping track crossing two sector boundaries\n");
+    return false;
+  }
+  int nTries = 0;
+  while (fabs(y) > yMax) {
+    if (nTries >= 2) {
+      printf("Skipping track after too many tries of rotation\n");
+      return false;
+    }
+    int sign = (y > 0) ? 1 : -1;
+    float alphaNew = alphaCurr + alpha * sign;
+    if (alphaNew > TMath::Pi()) {
+      alphaNew -= 2 * TMath::Pi();
+    } else if (alphaNew < -TMath::Pi()) {
+      alphaNew += 2 * TMath::Pi();
+    }
+    if (!t.rotate(alphaNew)) {
+      return false;
+    }
+    if (!mProp->PropagateToXBxByBz(t, xTmp)) {
+      return false;
+    }
+    y = t.getY();
+    ++nTries;
+  }
+  return true;
+}
+
+int TrackExtrapolator::getSector(float alpha)
+{
+  if (alpha < 0) {
+    alpha += 2.f * TMath::Pi();
+  } else if (alpha >= 2.f * TMath::Pi()) {
+    alpha -= 2.f * TMath::Pi();
+  }
+  return (int)(alpha * NSECTOR / (2.f * TMath::Pi()));
+}
+
+ChamberSpacePoint TrackExtrapolator::extrapolate(o2::track::TrackParCov& track, int layer)
+{
+
+  // ChamberSpacePoint pos;
+
+  // if (draw)
+  //   printf("Found ITS-TPC track with time %f us\n", trkITSTPC.getTimeMUS().getTimeStamp());
+
+  double minPtTrack = 0.5;
+
+  // const auto& track = trkITSTPC.getParamOut();
+  if (fabs(track.getEta()) > 0.84 || track.getPt() < minPtTrack) {
+    // no chance to find tracklets for these tracks
+    return ChamberSpacePoint(-999);
+  }
+
+  if (!mProp->PropagateToXBxByBz(track, mGeo->getTime0(layer))) {
+    // if (draw)
+    printf("Failed track propagation into layer %i\n", layer);
+    return ChamberSpacePoint(-999);
+  }
+  if (!adjustSector(track)) {
+    // if (draw)
+    printf("Failed track rotation in layer %i\n", layer);
+    // return false;
+  }
+
+  // if (draw)
+  // printf("Track has alpha of %f in layer %i. X(%f), Y(%f), Z(%f). Eta(%f), Pt(%f)\n", track.getAlpha(), layer, track.getX(), track.getY(), track.getZ(), track.getEta(), track.getPt());
+
+  return ChamberSpacePoint(track, mGeo);
+
+  // pos.x = track.getX();
+  // pos.y = track.getY();
+  // pos.z = track.getZ();
+
+  // }
+  //   ++nPointsTrigger;
+  //   trackMap.insert(std::make_pair(std::make_tuple(geo->getDetector(layer, stack, sector), row, col), iTrack));
+  //   int rowGlb = stack < 3 ? row + stack * 16 : row + 44 + (stack - 3) * 16; // pad row within whole sector
+  //   int colGlb = col + sector * 144;                                         // pad column number from 0 to NSectors * 144
+  //   hTracks[layer]->SetBinContent(rowGlb + 1, colGlb + 1, 4);
+  // }
+
+  // return true;
+}
+
+// ========================================================================
+// ========================================================================
+//
 // the DataManager class
+//
+// ========================================================================
 // ========================================================================
 
 
@@ -258,12 +580,12 @@ public:
   o2::dataformats::TFIDInfo GetTimeFrameInfo();
   TTreeReaderArray<o2::tpc::TrackTPC> *GetTimeFrameTPCTracks()
   {return tpctracks; }
-  
+
   TTreeReaderArray<o2::dataformats::TrackTPCITS> *GetTimeFrameTracks()
   { return tracks; }
 
   // access event info
-  RawDataSpan GetEvent();
+  RawEvent GetEvent();
   float GetTriggerTime();
 
   size_t GetTimeFrameNumber() { return iTimeframe; }
@@ -294,6 +616,8 @@ private:
 
   template <typename T>
   void AddReaderArray(TTreeReaderArray<T> *& array, std::string file, std::string tree, std::string branch);
+
+  TrackExtrapolator extra;
 };
 
 DataManager::DataManager(std::string dir)
@@ -365,6 +689,7 @@ bool DataManager::NextTimeFrame()
     iTimeframe++;
     cout << "## Time frame " << iTimeframe << endl;
 
+    // Fix of position/slope should no longer be necessary
     for (auto &tracklet : *tracklets) {
       tracklet.setPosition(tracklet.getPosition() ^ 0x80);
       tracklet.setSlope(tracklet.getSlope() ^ 0x80);
@@ -403,9 +728,9 @@ bool DataManager::NextEvent()
   return true;
 }
 
-RawDataSpan DataManager::GetEvent()
+RawEvent DataManager::GetEvent()
 {
-  RawDataSpan ev;
+  RawEvent ev;
   // ev.digits = GetDigits();
   ev.digits.b = digits->begin() + mTriggerRecord.getFirstDigit();
   ev.digits.e = ev.digits.begin() + mTriggerRecord.getNumberOfDigits();
@@ -422,6 +747,26 @@ RawDataSpan DataManager::GetEvent()
       }
     }
   }
+
+  if (tracks) {
+    for (auto &track : *tracks) {
+      //   // auto tracktime = track.getTimeMUS().getTimeStamp();
+      auto dtime = track.getTimeMUS().getTimeStamp() - evtime;
+      if (dtime > mMatchTimeMinTPC && dtime < mMatchTimeMaxTPC) {
+        ev.tracks.push_back(track);
+
+        for(int ly=0; ly<6; ++ly) {
+          auto point = extra.extrapolate(track.getParamOut(), ly);
+          if (point.isValid()) {
+            ev.evtrackpoints.push_back(point);
+          }
+        }
+      }
+    }
+  }
+
+  ev.trackpoints.b = ev.evtrackpoints.begin();
+  ev.trackpoints.e = ev.evtrackpoints.end();
 
   return ev;
 }
@@ -463,42 +808,38 @@ float DataManager::GetTriggerTime()
 //   hits = new TTreeReaderArray<o2::trd::Hit>(*rdrhits, "TRDHit");
 // }
 
+
 // ========================================================================
+// ========================================================================
+//
 // Drawing routines
+//
+// ========================================================================
 // ========================================================================
 
 TVirtualPad *DrawPadRow(RawDataSpan &padrow, TVirtualPad *pad = NULL, TH2F *adcmap = NULL)
 {
-  auto x = *padrow.digits.begin();
-  string desc = fmt::format("{:m}", x);
-  string name = fmt::format("det{:03d}_rob{:d}_mcm{:02d}",
-                            x.getDetector(), x.getROB(), x.getMCM());
+  // auto x = *padrow.digits.begin();
+  // string desc = fmt::format("{:m}", x);
+  string name = fmt::format("det{:03d}_row{:d}",
+                            padrow.getDetector(), padrow.getPadRow());
+  string desc = name;
 
-  if (pad == NULL)
-  {
+  cout << "Plotting padrow " << name << endl;
+  if (pad == NULL) {
     pad = new TCanvas(desc.c_str(), desc.c_str(), 1200, 500);
     pad->cd();
   }
-  // else
-  // {
-  //   pad->SetName(name.c_str());
-  //   pad->SetTitle(desc.c_str());
-  // }
 
   if (adcmap == NULL) {
     adcmap = new TH2F(name.c_str(), (desc + ";pad;time bin").c_str(), 144, 0., 144., 30, 0., 30.);
   }
 
-  for (auto digit : padrow.digits)
-  {
-    if (digit.isSharedDigit())
-    {
-      continue;
-    }
+  for (auto digit : padrow.digits) {
+    if (digit.isSharedDigit()) { continue; }
 
     auto adc = digit.getADC();
-    for (int tb = 0; tb < 30; ++tb)
-    {
+    for (int tb = 0; tb < 30; ++tb) {
       adcmap->Fill(digit.getPadCol(), tb, adc[tb]);
     }
   }
@@ -522,6 +863,23 @@ TVirtualPad *DrawPadRow(RawDataSpan &padrow, TVirtualPad *pad = NULL, TH2F *adcm
     auto ypos = UncalibratedPad(tracklet);
     auto slope = Slope(tracklet);
     trkl.DrawLine(pos, 0, pos - 30*slope, 30);
+    // trkl2.DrawLine(ypos, 0, ypos - 30*slope, 30);
+  }
+
+  TMarker mrk;
+  mrk.SetMarkerStyle(20);
+  mrk.SetMarkerSize(8);
+  mrk.SetMarkerColor(kGreen);
+  for (auto point : padrow.trackpoints)
+  {
+    mrk.DrawMarker(point.getPadCol(), 0);
+    cout << point.getDetector() << " / "
+         << point.getPadRow() << " / "
+         << point.getPadCol() << endl;
+    // auto pos = PadPosition(tracklet);
+    // auto ypos = UncalibratedPad(tracklet);
+    // auto slope = Slope(tracklet);
+    // trkl.DrawLine(pos, 0, pos - 30*slope, 30);
     // trkl2.DrawLine(ypos, 0, ypos - 30*slope, 30);
   }
 

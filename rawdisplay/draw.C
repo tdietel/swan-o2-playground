@@ -1,19 +1,8 @@
 
-#include "../macros/DataManager.C+"
-// #include "../macros/FmtFormat.C+"
-// #include "../macros/DrawRawSpan.C+"
-// #include "SpacePointConverter.C"
-// #include "StreamIO.C"
+#include "../macros/DataManager.C++"
 
-// #include "DataFormatsTRD/Constants.h"
-// #include "DataFormatsTRD/HelperMethods.h"
-// using namespace o2::trd::constants;
-
-
-// void DrawPadRow(RawDataSpan& padrow);
-// TPad* DrawMCM(RawDataSpan &mcm, TPad *pad=NULL);
-
-void draw(std::string dirname="data/")
+// void draw(std::string dirname="data/")
+void draw(std::string dirname = "/Users/tom/alice/data/alex-TRD-126-rec/")
 {
 
   // ----------------------------------------------------------------------
@@ -52,7 +41,7 @@ void draw(std::string dirname="data/")
       for (auto &[key, det] : RawDataPartitioner<ClassifierByMCM>(dman.GetEvent()))
       {
         if (det.digits.length() < 3) { continue; }
-        if (det.tracklets.length() >= 1) { continue; }
+        if (det.tracklets.length() < 1) { continue; }
 
         bool accept_roc = false;
         for (auto tracklet : det.tracklets)
