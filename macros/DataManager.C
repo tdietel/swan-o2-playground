@@ -788,7 +788,7 @@ float DataManager::GetTriggerTime()
     return mTriggerRecord.getBCData().bc2ns() * 1e-3;
   } else {
     o2::InteractionRecord intrec = {0, tfid.firstTForbit};
-    return mTriggerRecord.getBCData().differenceInBCMS(intrec);
+    return mTriggerRecord.getBCData().differenceInBCMUS(intrec);
   }
 }
 // void DataManager::ConnectMCHitsFile(std::string fname)
@@ -930,3 +930,9 @@ TPad *DrawMCM(RawDataSpan &mcm, TPad *pad)
 
   return pad;
 }
+
+// void DataManager(std::string dir=".")
+// {
+//   class DataManager dataman(dir);
+//   // cout << dataman << endl;
+// }

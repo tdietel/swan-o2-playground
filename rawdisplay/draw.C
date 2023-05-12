@@ -1,5 +1,5 @@
 
-#include "../macros/DataManager.C++"
+#include "../macros/DataManager.C"
 
 // void draw(std::string dirname="data/")
 void draw(std::string dirname = "/Users/tom/alice/data/alex-TRD-126-rec/")
