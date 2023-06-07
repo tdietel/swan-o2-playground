@@ -4,6 +4,7 @@ dpl-config.json
 *_C.d
 *_C_ACLiC*
 *.o
+core_dump*
 /.vscode/*.log
 .ipynb_checkpoints
 compile_flags.txt
