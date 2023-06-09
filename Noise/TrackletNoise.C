@@ -54,7 +54,8 @@ public:
   int GetMaxNTracklets();
 
   ROOT::RDF::RNode AddToDF(ROOT::RDF::RNode df);
-  map<int, mcminfo_t> FindNoisyMCMs(int min_tracklets);
+  // map<int, int> FindNoisyMCMs(int min_tracklets);
+  std::vector<std::array<int, 2>> FindNoisyMCMs(int min_tracklets);
 
   // protected:
   TH2* mQCLayerHistos[6];
@@ -109,11 +110,10 @@ ROOT::RDF::RNode TrackletMCMStats::AddToDF(ROOT::RDF::RNode df)
   // return df.Define("ntracklets", this->GetNTrackletsPerMCMForChannel, {"sector", "layer", "row", "col"});
 }
 
-
-
-map<int, mcminfo_t> TrackletMCMStats::FindNoisyMCMs(int min_tracklets)
+std::vector<std::array<int, 2>> TrackletMCMStats::FindNoisyMCMs(int min_tracklets)
 {
-  map<int, mcminfo_t> mcminfo;
+  // map<int, int> mcminfo;
+  std::vector<std::array<int, 2>> mcminfo;
 
   for(int sector=0; sector<18; ++sector) {
     for(int layer=0; layer<6; ++layer) {
@@ -123,13 +123,13 @@ map<int, mcminfo_t> TrackletMCMStats::FindNoisyMCMs(int min_tracklets)
           if (ntrkl>min_tracklets) {
             int mcmidx = ((sector*6 + layer)*76 + row)*8 + col/21;
 
-            int det, rob, mcm, ch;
-            o2::trd::HelperMethods::getPositionFromGlobalChannelIndex(mcmidx*21, det, rob, mcm, ch);
+            // int det, rob, mcm, ch;
+            // o2::trd::HelperMethods::getPositionFromGlobalChannelIndex(mcmidx*21, det, rob, mcm, ch);
 
-            mcminfo[mcmidx].detector = det;
-            mcminfo[mcmidx].rob = rob;
-            mcminfo[mcmidx].mcm = mcm;
-            mcminfo[mcmidx].ntracklets = ntrkl;
+            // mcminfo[mcmidx].detector = det;
+            // mcminfo[mcmidx].rob = rob;
+            // mcminfo[mcmidx].mcm = mcm;
+            mcminfo.push_back({mcmidx, ntrkl});
           }
         }
       }
@@ -180,7 +180,7 @@ void TrackletNoise()
   auto h = df.Histo1D("ntracklets");
   h->DrawClone();
 
-  for (auto& [idx, mcm] : mcmstats.FindNoisyMCMs(100e3)) {
-    cout << mcm.detector << " " << mcm.rob << ":" << mcm.mcm << endl;
-  }
+  // for (auto& [idx, ntrkl] : mcmstats.FindNoisyMCMs(100e3)) {
+  //   cout << idx << ":" << ntrkl << endl;
+  // }
 }
